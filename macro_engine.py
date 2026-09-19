@@ -72,16 +72,50 @@ class MacroEngine:
                 hwnd = self.target_window.get('hwnd')
                 if hwnd:
                     vk = None
+                    char_val = None
+
                     if len(key_str) == 1:
-                        vk = ctypes.windll.user32.VkKeyScanW(ord(key_str)) & 0xFF
+                        char_val = ord(key_str)
+                        vk = ctypes.windll.user32.VkKeyScanW(char_val) & 0xFF
+                    elif key_str.lower() in ['enter', '\r', '\n']:
+                        vk = win32con.VK_RETURN
+                    elif key_str.lower() == 'space':
+                        vk = win32con.VK_SPACE
+                    elif key_str.lower() == 'tab':
+                        vk = win32con.VK_TAB
+
                     if vk:
-                        win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, vk, 0)
+                        scan_code = ctypes.windll.user32.MapVirtualKeyW(vk, 0)
+                        lparam_down = 1 | (scan_code << 16)
+                        lparam_up = 1 | (scan_code << 16) | (1 << 30) | (1 << 31)
+
+                        hwnds = [hwnd]
+                        def enum_child_proc(child_hwnd, extra):
+                            if win32gui.IsWindowVisible(child_hwnd):
+                                hwnds.append(child_hwnd)
+                            return True
+
+                        try:
+                            win32gui.EnumChildWindows(hwnd, enum_child_proc, None)
+                        except Exception:
+                            pass
+
                         hold_time = min(0.02, interval / 2.0)
+
+                        # Post WM_KEYDOWN to main and child windows
+                        for target_h in hwnds:
+                            win32gui.PostMessage(target_h, win32con.WM_KEYDOWN, vk, lparam_down)
+                            if char_val and 32 <= char_val <= 126:
+                                win32gui.PostMessage(target_h, win32con.WM_CHAR, char_val, lparam_down)
+
                         time.sleep(hold_time)
-                        win32gui.PostMessage(hwnd, win32con.WM_KEYUP, vk, 0)
+
+                        # Post WM_KEYUP to main and child windows
+                        for target_h in hwnds:
+                            win32gui.PostMessage(target_h, win32con.WM_KEYUP, vk, lparam_up)
                         return
             except Exception as e:
-                print(f'Win key error: {e}')
+                print(f'Win enhanced key error: {e}')
 
         elif sys.platform == 'darwin' and self.target_window:
             try:
