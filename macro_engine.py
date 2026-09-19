@@ -68,9 +68,17 @@ class MacroEngine:
     def _press_key(self, key_str, interval=0.1):
         if sys.platform == 'win32' and self.target_window:
             try:
-                import ctypes, win32gui, win32con
+                import ctypes, win32gui, win32con, win32process
                 hwnd = self.target_window.get('hwnd')
                 if hwnd:
+                    # 1. Windows 11 Message Filter Unblock
+                    try:
+                        ctypes.windll.user32.ChangeWindowMessageFilterEx(hwnd, win32con.WM_KEYDOWN, 1, None)
+                        ctypes.windll.user32.ChangeWindowMessageFilterEx(hwnd, win32con.WM_KEYUP, 1, None)
+                        ctypes.windll.user32.ChangeWindowMessageFilterEx(hwnd, win32con.WM_CHAR, 1, None)
+                    except Exception:
+                        pass
+
                     vk = None
                     char_val = None
 
@@ -89,33 +97,43 @@ class MacroEngine:
                         lparam_down = 1 | (scan_code << 16)
                         lparam_up = 1 | (scan_code << 16) | (1 << 30) | (1 << 31)
 
-                        hwnds = [hwnd]
-                        def enum_child_proc(child_hwnd, extra):
-                            if win32gui.IsWindowVisible(child_hwnd):
-                                hwnds.append(child_hwnd)
-                            return True
+                        # 2. Windows 11 Thread Queue Linking (AttachThreadInput)
+                        target_thread_id, _ = win32process.GetWindowThreadProcessId(hwnd)
+                        current_thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
+
+                        attached = False
+                        if target_thread_id and target_thread_id != current_thread_id:
+                            attached = ctypes.windll.user32.AttachThreadInput(current_thread_id, target_thread_id, True)
 
                         try:
-                            win32gui.EnumChildWindows(hwnd, enum_child_proc, None)
-                        except Exception:
-                            pass
+                            hwnds = [hwnd]
+                            def enum_child_proc(child_hwnd, extra):
+                                if win32gui.IsWindowVisible(child_hwnd):
+                                    hwnds.append(child_hwnd)
+                                return True
 
-                        hold_time = min(0.02, interval / 2.0)
+                            try:
+                                win32gui.EnumChildWindows(hwnd, enum_child_proc, None)
+                            except Exception:
+                                pass
 
-                        # Post WM_KEYDOWN to main and child windows
-                        for target_h in hwnds:
-                            win32gui.PostMessage(target_h, win32con.WM_KEYDOWN, vk, lparam_down)
-                            if char_val and 32 <= char_val <= 126:
-                                win32gui.PostMessage(target_h, win32con.WM_CHAR, char_val, lparam_down)
+                            hold_time = min(0.02, interval / 2.0)
 
-                        time.sleep(hold_time)
+                            for target_h in hwnds:
+                                win32gui.PostMessage(target_h, win32con.WM_KEYDOWN, vk, lparam_down)
+                                if char_val and 32 <= char_val <= 126:
+                                    win32gui.PostMessage(target_h, win32con.WM_CHAR, char_val, lparam_down)
 
-                        # Post WM_KEYUP to main and child windows
-                        for target_h in hwnds:
-                            win32gui.PostMessage(target_h, win32con.WM_KEYUP, vk, lparam_up)
+                            time.sleep(hold_time)
+
+                            for target_h in hwnds:
+                                win32gui.PostMessage(target_h, win32con.WM_KEYUP, vk, lparam_up)
+                        finally:
+                            if attached:
+                                ctypes.windll.user32.AttachThreadInput(current_thread_id, target_thread_id, False)
                         return
             except Exception as e:
-                print(f'Win enhanced key error: {e}')
+                print(f'Win11 background key error: {e}')
 
         elif sys.platform == 'darwin' and self.target_window:
             try:
